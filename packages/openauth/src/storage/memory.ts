@@ -1,6 +1,6 @@
-import { joinKey, splitKey, StorageAdapter } from "./storage.js"
-import { existsSync, readFileSync } from "node:fs"
-import { writeFile } from "node:fs/promises"
+import { createKvStore, joinKey, splitKey, StorageAdapter } from "./storage.js"
+import { existsSync, readFileSync } from "fs"
+import { writeFile } from "fs/promises"
 
 export interface MemoryStorageOptions {
   persist?: string
@@ -41,7 +41,7 @@ export function MemoryStorage(input?: MemoryStorageOptions): StorageAdapter {
     }
     return { found: false, index: left }
   }
-  return {
+  return createKvStore({
     async get(key: string[]) {
       const match = search(joinKey(key))
       if (!match.found) return undefined
@@ -88,5 +88,5 @@ export function MemoryStorage(input?: MemoryStorageOptions): StorageAdapter {
         yield [splitKey(key), entry.value]
       }
     },
-  }
+  })
 }

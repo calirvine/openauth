@@ -46,7 +46,7 @@ import {
   UnknownStateError,
 } from "./error.js"
 import { compactDecrypt, CompactEncrypt, SignJWT } from "jose"
-import { Storage, StorageAdapter } from "./storage/storage.js"
+import { StorageAdapter } from "./storage/storage.js"
 import { keys } from "./keys.js"
 import { validatePKCE } from "./pkce.js"
 import { Select } from "./ui/select.js"
@@ -191,9 +191,8 @@ export function authorizer<
             }
             if (authorization.response_type === "code") {
               const code = crypto.randomUUID()
-              await Storage.set(
-                storage,
-                ["oauth:code", code],
+              await storage.setAuthorizationCode(
+                code,
                 {
                   type,
                   properties,
@@ -253,12 +252,7 @@ export function authorizer<
       deleteCookie(ctx, key)
     },
     async invalidate(subject: string) {
-      for await (const [key] of Storage.scan(this.storage, [
-        "oauth:refresh",
-        subject,
-      ])) {
-        await Storage.remove(this.storage, key)
-      }
+      await storage.invalidateKeys(subject)
     },
     storage,
   }
@@ -296,21 +290,15 @@ export function authorizer<
       type: string
       properties: any
       clientID: string
-      ttl: {
-        access: number
-        refresh: number
-      }
     },
   ) {
     const subject = await resolveSubject(value.type, value.properties)
     const refreshToken = crypto.randomUUID()
-    await Storage.set(
-      storage!,
-      ["oauth:refresh", subject, refreshToken],
-      {
-        ...value,
-      },
-      value.ttl.refresh,
+    await storage!.setRefreshToken(
+      subject,
+      refreshToken,
+      { ...value },
+      Date.now() / 1000 + ttlRefresh,
     )
     return {
       access: await new SignJWT({
@@ -411,17 +399,7 @@ export function authorizer<
             400,
           )
         const key = ["oauth:code", code.toString()]
-        const payload = await Storage.get<{
-          type: string
-          properties: any
-          clientID: string
-          redirectURI: string
-          ttl: {
-            access: number
-            refresh: number
-          }
-          pkce?: AuthorizationState["pkce"]
-        }>(storage, key)
+        const payload = await storage.getOauthCode(code.toString())
         if (!payload) {
           return c.json(
             {
@@ -431,7 +409,41 @@ export function authorizer<
             400,
           )
         }
-        await Storage.remove(storage, key)
+
+        await storage.invalidateOauthCode(code.toString())
+        if (payload.redirectURI !== form.get("redirect_uri")) {
+          return c.json(
+            {
+              error: "invalid_redirect_uri",
+              error_description: "Redirect URI mismatch",
+            },
+            400,
+          )
+        }
+        if (payload.clientID !== form.get("client_id")) {
+          return c.json(
+            {
+              error: "unauthorized_client",
+              error_description:
+                "Client is not authorized to use this authorization code",
+            },
+            403,
+          )
+        }
+
+        if (payload.pkce) {
+          const codeVerifier = form.get("code_verifier")?.toString()
+          if (!codeVerifier)
+            return c.json(
+              {
+                error: "invalid_grant",
+                error_description:
+                  "Authorization code has been used or expired",
+              },
+              400,
+            )
+        }
+        await storage.invalidateOauthCode(code.toString())
         if (payload.redirectURI !== form.get("redirect_uri")) {
           return c.json(
             {
@@ -500,15 +512,7 @@ export function authorizer<
         const token = splits.pop()!
         const subject = splits.join(":")
         const key = ["oauth:refresh", subject, token]
-        const payload = await Storage.get<{
-          type: string
-          properties: any
-          clientID: string
-          ttl: {
-            access: number
-            refresh: number
-          }
-        }>(storage, key)
+        const payload = await storage.getRefreshToken(subject, token)
         if (!payload) {
           return c.json(
             {
@@ -518,12 +522,6 @@ export function authorizer<
             400,
           )
         }
-        await Storage.remove(storage, key)
-        const tokens = await generateTokens(c, payload)
-        return c.json({
-          access_token: tokens.access,
-          refresh_token: tokens.refresh,
-        })
       }
 
       if (grantType === "client_credentials") {

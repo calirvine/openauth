@@ -15,7 +15,7 @@
  */
 
 import { client } from "./aws.js"
-import { joinKey, StorageAdapter } from "./storage.js"
+import { createKvStore, joinKey, StorageAdapter } from "./storage.js"
 
 /**
  * Configuration options for the Dynamo storage adapter.
@@ -69,7 +69,7 @@ export function DynamoStorage(options: DynamoStorageOptions): StorageAdapter {
           "X-Amz-Target": `DynamoDB_20120810.${action}`,
         },
         body: JSON.stringify(payload),
-      },
+      }
     )
 
     if (!response.ok) {
@@ -79,7 +79,7 @@ export function DynamoStorage(options: DynamoStorageOptions): StorageAdapter {
     return response.json() as Promise<any>
   }
 
-  return {
+  return createKvStore({
     async get(key: string[]) {
       const { pk: keyPk, sk: keySk } = parseKey(key)
       const params = {
@@ -164,5 +164,5 @@ export function DynamoStorage(options: DynamoStorageOptions): StorageAdapter {
         lastEvaluatedKey = result.LastEvaluatedKey
       }
     },
-  }
+  })
 }
